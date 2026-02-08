@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PulseTune Admin</title>
+
+  <link rel="stylesheet" href="/static/style.css">
+
+  <style>
+    :root{
+      --card: rgba(255,255,255,.06);
+      --stroke: rgba(255,255,255,.10);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.70);
+      --btn: rgba(255,255,255,.10);
+      --btn2: rgba(255,255,255,.14);
+      --good: rgba(46,213,115,.95);
+      --bad: rgba(255,71,87,.95);
+    }
+    body{margin:0;padding:24px;color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+    .wrap{max-width:1100px;margin:0 auto;}
+    .top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px;}
+    h1{font-size:22px;margin:0;}
+    .pill{padding:6px 10px;border-radius:999px;border:1px solid var(--stroke);background:var(--card);color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px;}
+    .dot{width:10px;height:10px;border-radius:999px;background:rgba(255,255,255,.25);}
+    .dot.good{background:var(--good);} .dot.bad{background:var(--bad);}
+    .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:12px;}
+    @media (max-width: 900px){ .grid{grid-template-columns:1fr;} }
+    .card{border:1px solid var(--stroke);background:var(--card);border-radius:18px;padding:14px;backdrop-filter:blur(10px);}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+    .btn{border:1px solid var(--stroke);background:var(--btn);color:var(--text);padding:10px 12px;border-radius:14px;cursor:pointer;font-weight:700;font-size:13px;transition:.15s ease;}
+    .btn:hover{background:var(--btn2);transform:translateY(-1px);}
+    .btn:active{transform:translateY(0);}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.18);border:1px solid var(--stroke);border-radius:14px;padding:12px;margin-top:10px;min-height:220px;}
+    .hint{color:var(--muted);font-size:12px;margin:8px 0 0;}
+    table{width:100%;border-collapse:collapse;margin-top:10px;}
+    th,td{border-bottom:1px solid rgba(255,255,255,.12);padding:10px;text-align:left;font-size:13px;vertical-align:top}
+    th{color:rgba(255,255,255,.8)}
+    td{color:rgba(255,255,255,.9)}
+    .small{font-size:12px;color:var(--muted)}
+    .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .chip{padding:8px 10px;border-radius:999px;border:1px solid var(--stroke);background:rgba(0,0,0,.12);font-weight:700;font-size:12px;cursor:pointer}
+    .chip:hover{background:rgba(255,255,255,.08)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>PulseTune Admin</h1>
+        <div class="hint">Bu sayfa gizli URL + Basic Auth ile erişilir.</div>
+      </div>
+      <div class="pill">
+        <span id="dot" class="dot"></span>
+        <span id="status">Bağlantı kontrolü…</span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row">
+          <button class="btn" id="btnHealth">Health</button>
+          <button class="btn" id="btnStats">Logs (JSON)</button>
+          <button class="btn" id="btnTable">Tabloyu yenile</button>
+        </div>
+
+        <div class="mono" id="out">Hazır.</div>
+
+        <div class="hint">Aşağıdaki tablo son 200 aramayı gösterir (admin-only).</div>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr><th>Zaman</th><th>Kaynak</th><th>Sorgu</th><th>IP</th><th>User-Agent</th></tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="5" class="small">Henüz veri yok.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:900;margin-bottom:6px;">Kısayollar</div>
+        <div class="small">Sadece senin için: popüler sorguları tek tıkla önizle.</div>
+        <div class="chips" id="chips"></div>
+        <div class="hint">Not: Bu panel ana sitede görünmez. URL’yi bilen + şifreyi bilen girer.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const out = document.getElementById("out");
+    const statusEl = document.getElementById("status");
+    const dot = document.getElementById("dot");
+    const tbody = document.getElementById("tbody");
+    const chips = document.getElementById("chips");
+
+    const base = location.pathname.replace(/\/$/, "");
+
+    function setStatus(ok, text){
+      statusEl.textContent = text;
+      dot.classList.remove("good","bad");
+      dot.classList.add(ok ? "good" : "bad");
+    }
+
+    async function fetchText(url){
+      const r = await fetch(url, { cache: "no-store" });
+      const t = await r.text();
+      return { ok: r.ok, status: r.status, text: t };
+    }
+
+    function pretty(txt){
+      try{ return JSON.stringify(JSON.parse(txt), null, 2); }
+      catch{ return txt; }
+    }
+
+    function esc(s){
+      return (s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+    }
+
+    function fmtTs(sec){
+      try{
+        const d = new Date(sec*1000);
+        return d.toLocaleString();
+      }catch{ return String(sec); }
+    }
+
+    async function call(endpoint){
+      const url = base + endpoint;
+      const res = await fetchText(url);
+      out.textContent = `[${res.status}] ${url}\n\n` + pretty(res.text);
+      setStatus(res.ok, res.ok ? "Bağlı" : "Yetkisiz / Hata");
+      return res;
+    }
+
+    async function loadTable(){
+      const res = await call("/stats");
+      let j = null;
+      try{ j = JSON.parse(res.text); }catch{}
+      if (!j || !j.ok){
+        tbody.innerHTML = `<tr><td colspan="5" class="small">Veri alınamadı.</td></tr>`;
+        return;
+      }
+
+      const rows = j.rows || [];
+      if (!rows.length){
+        tbody.innerHTML = `<tr><td colspan="5" class="small">Log yok.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${esc(fmtTs(r.created_at))}</td>
+          <td>${esc(r.source)}</td>
+          <td>${esc(r.q)}</td>
+          <td>${esc(r.ip)}</td>
+          <td>${esc(r.user_agent)}</td>
+        </tr>
+      `).join("");
+
+      // chips: en çok tekrar eden 8 sorgu
+      const freq = {};
+      for (const r of rows){
+        const q = (r.q||"").trim();
+        if (!q) continue;
+        freq[q] = (freq[q]||0) + 1;
+      }
+      const top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+      chips.innerHTML = top.map(([q,c]) => `<div class="chip" title="${esc(q)}">${esc(q)} <span class="small">(${c})</span></div>`).join("");
+    }
+
+    document.getElementById("btnHealth").onclick = () => call("/health");
+    document.getElementById("btnStats").onclick  = () => call("/stats");
+    document.getElementById("btnTable").onclick  = () => loadTable();
+
+    // ilk açılış
+    (async () => {
+      const h = await call("/health");
+      if (h.ok) loadTable();
+    })();
+  </script>
+</body>
+</html>
