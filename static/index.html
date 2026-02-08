@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PulseTune</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg">
+    <div class="orb o1"></div>
+    <div class="orb o2"></div>
+    <div class="orb o3"></div>
+    <div class="noise"></div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">♪</div>
+      <div class="btxt">
+        <div class="name">PulseTune</div>
+        <div class="tag">Birkaç kelimeyle müzik bul</div>
+      </div>
+    </div>
+
+    <div class="status">
+      <span class="led" id="healthDot"></span>
+      <span class="stxt" id="healthText">Bağlantı kontrol ediliyor...</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div class="heroLeft">
+        <h1>Bir hissi yaz. <span class="grad">Müzik gelsin.</span></h1>
+        <p class="sub">
+          Spotify + YouTube’dan tek aramada. “hüzünlü yağmur gece”, “enerjik spor”, “lofi ders”…
+        </p>
+
+        <div class="searchCard">
+          <div class="searchRow">
+            <div class="iconBox">⌕</div>
+            <input id="q" class="searchInput" placeholder="Birkaç kelime yaz... (ör: sakin gece slow)" autocomplete="off" />
+            <button id="btnSearch" class="btnPrimary">Ara</button>
+          </div>
+
+          <div class="metaRow">
+            <div class="seg">
+              <button class="segBtn active" data-source="all">Hepsi</button>
+              <button class="segBtn" data-source="spotify">Spotify</button>
+              <button class="segBtn" data-source="youtube">YouTube</button>
+            </div>
+
+            <div class="hint">
+              <span class="pill">İpucu</span>
+              mood + ortam + tempo
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panelHead">
+            <div class="panelTitle">Geçmiş</div>
+            <button class="miniBtn" id="clearHistory">Temizle</button>
+          </div>
+          <div class="chips" id="historyChips"></div>
+        </div>
+
+        <div class="chips" id="quickChips"></div>
+      </div>
+
+      <div class="heroRight">
+        <div class="glassCard">
+          <div class="gcTop">
+            <div>
+              <div class="gcTitle">Sonuçlar</div>
+              <div class="gcSub" id="statusText">Arama yapınca burada görünür.</div>
+            </div>
+            <div class="mini">
+              <div class="miniDot"></div>
+              <div class="miniTxt">Premium</div>
+            </div>
+          </div>
+
+          <div class="errorBox" id="errorBox" hidden></div>
+
+          <div class="grid" id="grid"></div>
+
+          <!-- ✅ Premium Empty State -->
+          <div class="emptyPro" id="emptyState">
+            <div class="emptyIcon pulse">🎧</div>
+            <div class="emptyTitle">Bir his yaz, müzik gelsin</div>
+            <div class="emptySub">
+              Aşağıdan bir örnek seç ya da kendi kelimelerini yaz.
+            </div>
+            <div class="chips" id="emptyChips"></div>
+          </div>
+
+          <div class="favWrap">
+            <div class="panelHead">
+              <div class="panelTitle">Favoriler</div>
+              <button class="miniBtn" id="clearFavs">Temizle</button>
+            </div>
+
+            <div class="grid" id="favGrid"></div>
+
+            <!-- ✅ Premium Favorites Empty -->
+            <div class="favEmptyPro" id="favEmpty">
+              <div class="favRow">
+                <div class="favIcon pulseSoft">⭐</div>
+                <div>
+                  <div class="favTitle">Favorilerini oluştur</div>
+                  <div class="favSub">Beğendiğin parçaları kartlardaki ★ ile ekle.</div>
+                </div>
+              </div>
+              <div class="chips" id="favHintChips"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <div class="footLeft">© PulseTune</div>
+      <div class="footRight">Spotify + YouTube arama demo</div>
+    </footer>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
