@@ -1,481 +1,254 @@
-// ---------- Elements
-const qInput = document.getElementById("q");
-const btnSearch = document.getElementById("btnSearch");
+const $ = (sel) => document.querySelector(sel);
 
-const grid = document.getElementById("grid");
-const favGrid = document.getElementById("favGrid");
+const form = $("#searchForm");
+const qInput = $("#q");
+const resultsGrid = $("#resultsGrid");
+const resultsMeta = $("#resultsMeta");
 
-const statusText = document.getElementById("statusText");
-const errorBox = document.getElementById("errorBox");
-const emptyState = document.getElementById("emptyState");
+const sourceSelect = $("#sourceSelect");
+const segBtns = Array.from(document.querySelectorAll(".segBtn"));
 
-const quickChips = document.getElementById("quickChips");
-const historyChips = document.getElementById("historyChips");
-const clearHistoryBtn = document.getElementById("clearHistory");
-const clearFavsBtn = document.getElementById("clearFavs");
-const favEmpty = document.getElementById("favEmpty");
+const historyChips = $("#historyChips");
+const clearHistoryBtn = $("#clearHistory");
 
-const emptyChips = document.getElementById("emptyChips");
-const favHintChips = document.getElementById("favHintChips");
+const favoritesBox = $("#favorites");
+const clearFavBtn = $("#clearFav");
+const healthLine = $("#healthLine");
 
-const healthDot = document.getElementById("healthDot");
-const healthText = document.getElementById("healthText");
+const HISTORY_KEY = "pulsetune_history_v1";
+const FAV_KEY = "pulsetune_favs_v1";
 
-// ---------- State
-let selectedSource = "all";
-
-// Sayfada tek bir YouTube embed açık kalsın
-let openYouTube = { wrap: null, btn: null };
-
-// ---------- Suggestions
-const quick = [
-  "lofi ders",
-  "enerjik spor",
-  "hüzünlü yağmur gece",
-  "sakin uyku",
-  "2000'ler pop",
-  "trap sert",
-  "romantik akşam",
-];
-
-// ---------- Storage
-const LS_HISTORY = "pulsetune_history_v1";
-const LS_FAVS = "pulsetune_favs_v1";
+let currentSource = "all";
+let lastResults = [];
 
 function loadJSON(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
+  try { return JSON.parse(localStorage.getItem(key) || "") ?? fallback; }
+  catch { return fallback; }
 }
 function saveJSON(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-// ---------- UI helpers
-function setError(msg) {
-  if (!msg) {
-    errorBox.hidden = true;
-    errorBox.textContent = "";
-    return;
-  }
-  errorBox.hidden = false;
-  errorBox.textContent = msg;
-}
-function setEmpty(show) {
-  emptyState.style.display = show ? "block" : "none";
-}
-function sourceBadge(source) {
-  return source === "spotify" ? "Spotify" : "YouTube";
+function setSource(src) {
+  currentSource = src;
+  // seg
+  segBtns.forEach(b => b.classList.toggle("active", b.dataset.source === src));
+  // select
+  sourceSelect.value = src;
 }
 
-// ---------- Skeletons
-function renderSkeletons(count = 6) {
-  grid.innerHTML = "";
-  setEmpty(false);
-  for (let i = 0; i < count; i++) {
-    const s = document.createElement("div");
-    s.className = "skel shimmer";
-    s.innerHTML = `
-      <div class="skelTop"></div>
-      <div class="skelBody">
-        <div class="skelLine" style="width: 78%"></div>
-        <div class="skelLine" style="width: 52%"></div>
-        <div class="skelLine" style="width: 65%"></div>
-      </div>
-    `;
-    grid.appendChild(s);
+sourceSelect.addEventListener("change", () => setSource(sourceSelect.value));
+segBtns.forEach(btn => btn.addEventListener("click", () => setSource(btn.dataset.source)));
+
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest(".chipBtn");
+  if (!chip) return;
+  const qq = chip.dataset.q;
+  if (!qq) return;
+  qInput.value = qq;
+  doSearch(qq, currentSource);
+});
+
+clearHistoryBtn.addEventListener("click", () => {
+  saveJSON(HISTORY_KEY, []);
+  renderHistory();
+});
+
+clearFavBtn.addEventListener("click", () => {
+  saveJSON(FAV_KEY, []);
+  renderFavorites();
+});
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = qInput.value.trim();
+  if (!q) return;
+  doSearch(q, currentSource);
+});
+
+async function checkHealth() {
+  try {
+    const r = await fetch("/api/health", { cache: "no-store" });
+    const data = await r.json();
+    const sp = data.spotify_configured ? "Spotify hazır" : "Spotify anahtar yok (demo açık)";
+    const yt = data.youtube_configured ? "YouTube hazır" : "YouTube anahtar yok (demo açık)";
+    healthLine.textContent = `${sp} • ${yt}`;
+  } catch {
+    healthLine.textContent = "Bağlantı kontrolü yapılamadı.";
   }
 }
 
-// ---------- History
-function getHistory() {
-  return loadJSON(LS_HISTORY, []);
-}
 function pushHistory(q) {
-  const cleaned = (q || "").trim();
-  if (!cleaned) return;
-  const h = getHistory();
-  const next = [cleaned, ...h.filter((x) => x !== cleaned)].slice(0, 12);
-  saveJSON(LS_HISTORY, next);
+  const list = loadJSON(HISTORY_KEY, []);
+  const cleaned = q.trim();
+  const next = [cleaned, ...list.filter(x => x !== cleaned)].slice(0, 12);
+  saveJSON(HISTORY_KEY, next);
   renderHistory();
 }
-function clearHistory() {
-  saveJSON(LS_HISTORY, []);
-  renderHistory();
-}
-function renderHistory() {
-  const h = getHistory();
-  historyChips.innerHTML = "";
 
-  if (h.length === 0) {
-    const e = document.createElement("div");
-    e.className = "chip is-empty";
-    e.textContent = "Henüz geçmiş yok";
-    historyChips.appendChild(e);
+function renderHistory() {
+  const list = loadJSON(HISTORY_KEY, []);
+  historyChips.innerHTML = "";
+  if (!list.length) {
+    const div = document.createElement("div");
+    div.className = "notice";
+    div.textContent = "Henüz geçmiş yok. Bir şey ara, burada görünsün.";
+    historyChips.appendChild(div);
     return;
   }
-
-  for (const item of h) {
-    const el = document.createElement("div");
-    el.className = "chip";
-    el.textContent = item;
-    el.addEventListener("click", () => {
-      qInput.value = item;
-      search();
-    });
-    historyChips.appendChild(el);
-  }
+  list.forEach(q => {
+    const b = document.createElement("button");
+    b.className = "chipBtn";
+    b.textContent = `+ ${q}`;
+    b.dataset.q = q;
+    historyChips.appendChild(b);
+  });
 }
 
-// ---------- Favorites
-function favKey(item) {
-  const id = item.id || `${item.title}__${item.subtitle}`;
-  return `${item.source}:${id}`;
-}
 function getFavs() {
-  return loadJSON(LS_FAVS, {});
+  return loadJSON(FAV_KEY, []);
 }
-function setFavs(obj) {
-  saveJSON(LS_FAVS, obj);
-}
-function isFav(item) {
-  const f = getFavs();
-  return Boolean(f[favKey(item)]);
+function isFav(id) {
+  return getFavs().some(x => x.id === id);
 }
 function toggleFav(item) {
-  const f = getFavs();
-  const k = favKey(item);
-  if (f[k]) delete f[k];
-  else f[k] = item;
-  setFavs(f);
-  renderFavs();
-}
-function clearFavs() {
-  setFavs({});
-  renderFavs();
-}
-function renderFavs() {
-  const f = getFavs();
-  const arr = Object.values(f);
-
-  favGrid.innerHTML = "";
-  if (arr.length === 0) {
-    favEmpty.style.display = "block";
-    return;
-  }
-  favEmpty.style.display = "none";
-
-  for (const item of arr) {
-    favGrid.appendChild(createCard(item));
-  }
+  const favs = getFavs();
+  const idx = favs.findIndex(x => x.id === item.id);
+  if (idx >= 0) favs.splice(idx, 1);
+  else favs.unshift(item);
+  saveJSON(FAV_KEY, favs.slice(0, 50));
+  renderFavorites();
+  renderResults(lastResults); // yıldızı güncelle
 }
 
-// ---------- YouTube embed (single open)
-function youtubeEmbedUrl(videoId) {
-  return `https://www.youtube-nocookie.com/embed/${videoId}`;
-}
-function closeOpenYouTube() {
-  if (!openYouTube.wrap) return;
+function renderFavorites() {
+  const favs = getFavs();
+  favoritesBox.innerHTML = "";
+  $("#favHint").style.display = favs.length ? "none" : "block";
 
-  const iframe = openYouTube.wrap.querySelector("iframe");
-  if (iframe) {
-    const src = iframe.getAttribute("src");
-    iframe.setAttribute("src", src); // stop video
-  }
-  openYouTube.wrap.style.display = "none";
-  if (openYouTube.btn) openYouTube.btn.textContent = "İzle";
-  openYouTube = { wrap: null, btn: null };
+  favs.forEach(item => favoritesBox.appendChild(buildCard(item, true)));
 }
 
-// ---------- Cards
-function createCard(item) {
-  const div = document.createElement("div");
-  div.className = "card";
+function actionLabel(item) {
+  if (item.source === "youtube") return "İzle";
+  return "Aç";
+}
 
-  const thumb = document.createElement("div");
-  thumb.className = "thumb";
+function buildCard(item, inFavorites=false) {
+  const card = document.createElement("div");
+  card.className = "card";
+
+  const media = document.createElement("div");
+  media.className = "media";
 
   const img = document.createElement("img");
-  img.alt = item.title || "";
+  img.alt = item.title || "Kapak";
+  img.loading = "lazy";
   img.src = item.image || "";
-  thumb.appendChild(img);
+  media.appendChild(img);
 
   const badge = document.createElement("div");
   badge.className = "badge";
-  badge.textContent = sourceBadge(item.source);
-  thumb.appendChild(badge);
+  badge.textContent = item.source === "youtube" ? "YouTube" : "Spotify";
+  media.appendChild(badge);
 
-  const fav = document.createElement("button");
-  fav.className = "favBtn" + (isFav(item) ? " on" : "");
-  fav.title = isFav(item) ? "Favoriden çıkar" : "Favoriye ekle";
-  fav.textContent = "★";
-  fav.addEventListener("click", (e) => {
-    e.preventDefault();
+  const star = document.createElement("div");
+  star.className = "star" + (isFav(item.id) ? " on" : "");
+  star.textContent = "★";
+  star.title = isFav(item.id) ? "Favoriden çıkar" : "Favoriye ekle";
+  star.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleFav(item);
-    fav.className = "favBtn" + (isFav(item) ? " on" : "");
-    fav.title = isFav(item) ? "Favoriden çıkar" : "Favoriye ekle";
   });
-  thumb.appendChild(fav);
+  media.appendChild(star);
 
-  const meta = document.createElement("div");
-  meta.className = "meta";
+  const body = document.createElement("div");
+  body.className = "cardBody";
 
-  const title = document.createElement("div");
+  const title = document.createElement("p");
   title.className = "title";
-  title.textContent = item.title || "—";
+  title.textContent = item.title || "";
+  body.appendChild(title);
 
-  const sub = document.createElement("div");
-  sub.className = "subline";
+  const sub = document.createElement("p");
+  sub.className = "sub";
   sub.textContent = item.subtitle || "";
+  body.appendChild(sub);
 
   const actions = document.createElement("div");
   actions.className = "actions";
 
-  const open = document.createElement("a");
-  open.className = "a";
-  open.href = item.url || "#";
-  open.target = "_blank";
-  open.rel = "noopener";
-  open.textContent = "Aç";
-  actions.appendChild(open);
+  const openBtn = document.createElement("button");
+  openBtn.className = "btn";
+  openBtn.type = "button";
+  openBtn.textContent = actionLabel(item);
+  openBtn.addEventListener("click", () => {
+    if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
+  });
+  actions.appendChild(openBtn);
 
-  // Spotify preview (varsa)
-  let audio = null;
-  if (item.source === "spotify" && item.preview) {
-    const play = document.createElement("button");
-    play.className = "play";
-    play.textContent = "▶";
-    play.title = "Preview çal";
+  body.appendChild(actions);
 
-    audio = document.createElement("audio");
-    audio.className = "preview";
-    audio.src = item.preview;
+  card.appendChild(media);
+  card.appendChild(body);
 
-    let shown = false;
-    play.addEventListener("click", async () => {
-      try {
-        if (!shown) {
-          audio.style.display = "block";
-          shown = true;
-        }
-        if (audio.paused) {
-          await audio.play();
-          play.textContent = "⏸";
-        } else {
-          audio.pause();
-          play.textContent = "▶";
-        }
-      } catch {}
-    });
+  // Kartın tamamına tıklayınca da aç
+  card.addEventListener("click", () => {
+    if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
+  });
 
-    audio.addEventListener("ended", () => (play.textContent = "▶"));
-    actions.appendChild(play);
-  }
-
-  // YouTube izleme (embed) + tek açık
-  let embedWrap = null;
-  if (item.source === "youtube" && item.id) {
-    const watch = document.createElement("button");
-    watch.className = "play";
-    watch.textContent = "İzle";
-    watch.title = "Site içinde izle";
-
-    embedWrap = document.createElement("div");
-    embedWrap.className = "embedWrap";
-    embedWrap.innerHTML = `
-      <iframe
-        src="${youtubeEmbedUrl(item.id)}"
-        title="YouTube video"
-        frameborder="0"
-        allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowfullscreen>
-      </iframe>
-    `;
-
-    watch.addEventListener("click", () => {
-      const isOpen = embedWrap.style.display === "block";
-
-      if (!isOpen) closeOpenYouTube();
-
-      if (isOpen) {
-        const iframe = embedWrap.querySelector("iframe");
-        if (iframe) {
-          const src = iframe.getAttribute("src");
-          iframe.setAttribute("src", src);
-        }
-        embedWrap.style.display = "none";
-        watch.textContent = "İzle";
-        openYouTube = { wrap: null, btn: null };
-      } else {
-        embedWrap.style.display = "block";
-        watch.textContent = "Kapat";
-        openYouTube = { wrap: embedWrap, btn: watch };
-      }
-    });
-
-    actions.appendChild(watch);
-  } else {
-    // Spotify için ikinci kolon boş kalmasın diye küçük placeholder (opsiyonel)
-    const ghost = document.createElement("div");
-    ghost.style.opacity = "0";
-    ghost.textContent = ".";
-    actions.appendChild(ghost);
-  }
-
-  meta.appendChild(title);
-  meta.appendChild(sub);
-  meta.appendChild(actions);
-  if (audio) meta.appendChild(audio);
-  if (embedWrap) meta.appendChild(embedWrap);
-
-  div.appendChild(thumb);
-  div.appendChild(meta);
-  return div;
+  return card;
 }
 
-// ---------- Render results
-function renderResults(results) {
-  closeOpenYouTube();
-  grid.innerHTML = "";
+function renderResults(items) {
+  lastResults = items || [];
+  resultsGrid.innerHTML = "";
 
-  if (!results || results.length === 0) {
-    setEmpty(true);
+  if (!items || !items.length) {
+    const div = document.createElement("div");
+    div.className = "notice";
+    div.style.gridColumn = "1 / -1";
+    div.innerHTML = `
+      <b>Henüz sonuç yok</b><br/>
+      Bir arama yap, Spotify/YouTube’dan öneriler gelsin.
+    `;
+    resultsGrid.appendChild(div);
     return;
   }
 
-  setEmpty(false);
-  for (const item of results) {
-    grid.appendChild(createCard(item));
-  }
+  items.forEach(item => resultsGrid.appendChild(buildCard(item)));
 }
 
-// ---------- Health check
-async function healthCheck() {
-  try {
-    const r = await fetch("/api/health");
-    const j = await r.json();
+async function doSearch(q, source) {
+  const limit = 12;
+  resultsMeta.textContent = "Aranıyor…";
+  resultsGrid.innerHTML = "";
 
-    if (j.ok) {
-      const s = j.spotify_configured ? "Spotify ✓" : "Spotify ✕";
-      const y = j.youtube_configured ? "YouTube ✓" : "YouTube ✕";
-      healthText.textContent = `${s} • ${y}`;
+  pushHistory(q);
 
-      if (j.spotify_configured && j.youtube_configured) {
-        healthDot.classList.add("ok");
-        healthDot.classList.remove("bad");
-      } else {
-        healthDot.classList.add("bad");
-        healthDot.classList.remove("ok");
-      }
-      return;
-    }
-  } catch {}
-
-  healthText.textContent = "Sunucuya ulaşılamadı";
-  healthDot.classList.add("bad");
-  healthDot.classList.remove("ok");
-}
-
-// ---------- Search
-async function search() {
-  const q = (qInput.value || "").trim();
-  if (!q) return;
-
-  setError(null);
-  statusText.textContent = "Aranıyor...";
-  btnSearch.disabled = true;
-
-  renderSkeletons(6);
+  const url = `/api/search?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source)}&limit=${limit}`;
 
   try {
-    const params = new URLSearchParams({ q, source: selectedSource, limit: "12" });
-    const r = await fetch(`/api/search?${params.toString()}`);
-    const j = await r.json();
+    const r = await fetch(url, { cache: "no-store" });
+    const data = await r.json();
 
-    if (!r.ok) {
-      setError(j.error || "Bir hata oldu.");
+    if (!r.ok || !data.ok) {
+      resultsMeta.textContent = "Hata oluştu.";
       renderResults([]);
-      statusText.textContent = "";
       return;
     }
 
-    if (j.error) setError(j.error);
-    else setError(null);
-
-    pushHistory(q);
-    renderResults(j.results || []);
-    statusText.textContent = `${(j.results || []).length} sonuç`;
-  } catch {
-    setError("Sunucu hatası / bağlantı hatası.");
+    const res = data.results || [];
+    resultsMeta.textContent = `${res.length} sonuç`;
+    renderResults(res);
+  } catch (e) {
+    resultsMeta.textContent = "Bağlantı hatası.";
     renderResults([]);
-    statusText.textContent = "";
-  } finally {
-    btnSearch.disabled = false;
   }
 }
 
-// ---------- Source buttons
-function setupSourceButtons() {
-  document.querySelectorAll(".segBtn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".segBtn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      selectedSource = btn.dataset.source || "all";
-    });
-  });
-}
-
-// ---------- Chips builders
-function buildChips(containerEl, items, onClick) {
-  containerEl.innerHTML = "";
-  for (const text of items) {
-    const el = document.createElement("div");
-    el.className = "chip";
-    el.textContent = text;
-    el.addEventListener("click", () => onClick(text));
-    containerEl.appendChild(el);
-  }
-}
-
-function setupChips() {
-  // soldaki quick
-  buildChips(quickChips, quick, (text) => {
-    qInput.value = text;
-    qInput.focus();
-    search();
-  });
-
-  // sağdaki empty state chipleri
-  buildChips(emptyChips, ["hüzünlü yağmur gece", "enerjik spor", "lofi ders"], (text) => {
-    qInput.value = text;
-    qInput.focus();
-    search();
-  });
-
-  // favori boşken mini hint chipleri
-  buildChips(favHintChips, ["akşam chill", "motivasyon", "yol müziği"], (text) => {
-    qInput.value = text;
-    qInput.focus();
-    search();
-  });
-}
-
-// ---------- Events
-btnSearch.addEventListener("click", search);
-qInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") search();
-});
-clearHistoryBtn.addEventListener("click", clearHistory);
-clearFavsBtn.addEventListener("click", clearFavs);
-
-// ---------- Init
-setupSourceButtons();
-setupChips();
+// init
+setSource("all");
 renderHistory();
-renderFavs();
-setEmpty(true);
-healthCheck();
+renderFavorites();
+checkHealth();
