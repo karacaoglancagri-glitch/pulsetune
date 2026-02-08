@@ -1,7 +1,9 @@
 import os
 import time
 import sqlite3
+import base64
 import requests
+from functools import wraps
 from urllib.parse import quote_plus
 
 from flask import Flask, request, jsonify, send_from_directory, Response
@@ -14,8 +16,12 @@ SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 
+# Admin Basic Auth (Render env)
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "change-me")
+
+# Admin path (gizlilik) -> Render env ile değiştir: ADMIN_PATH="x9k2p"
+ADMIN_PATH = os.getenv("ADMIN_PATH", "_admin")
 
 # Anahtar yoksa bile hata göstermeden demo sonuçlar
 DEMO_FALLBACK = os.getenv("DEMO_FALLBACK", "1").strip() != "0"
@@ -23,6 +29,7 @@ DEMO_FALLBACK = os.getenv("DEMO_FALLBACK", "1").strip() != "0"
 _spotify_token = {"access_token": None, "expires_at": 0}
 
 
+# ---------------- DB
 def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -46,8 +53,11 @@ def init_db():
     )
     conn.commit()
     conn.close()
-
-
+# Render/Gunicorn için: uygulama import edilince DB hazır olsun
+try:
+    init_db()
+except Exception as e:
+    print("init_db failed:", e)
 def log_search(q: str, source: str):
     try:
         conn = db()
@@ -68,13 +78,42 @@ def log_search(q: str, source: str):
         pass
 
 
-def basic_auth_required():
-    auth = request.authorization
-    if not auth or auth.username != ADMIN_USER or auth.password != ADMIN_PASS:
-        return Response("Unauthorized", 401, {"WWW-Authenticate": 'Basic realm="Admin Panel"'})
-    return None
+# ---------------- Admin Auth (Basic)
+def _basic_auth_ok() -> bool:
+    """
+    request.authorization Render arkasında bazen boş gelebiliyor.
+    Bu yüzden Authorization header'ı elle parse ediyoruz.
+    """
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+        user, pw = raw.split(":", 1)
+        return bool(user) and bool(pw) and user == ADMIN_USER and pw == ADMIN_PASS
+    except Exception:
+        return False
 
 
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Env ile admin ayarlanmadıysa kapalı tut (güvenlik)
+        if not ADMIN_USER or not ADMIN_PASS:
+            return jsonify(ok=False, error="Admin is not configured"), 403
+
+        if not _basic_auth_ok():
+            return Response(
+                "Unauthorized",
+                401,
+                {"WWW-Authenticate": 'Basic realm="PulseTune Admin"'},
+            )
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+# ---------------- Search helpers
 def spotify_search_url(q: str) -> str:
     return f"https://open.spotify.com/search/{quote_plus(q)}"
 
@@ -261,6 +300,7 @@ def search_youtube(q: str, limit: int = 10):
     return {"ok": True, "results": normalize_youtube(data.get("items") or [])}
 
 
+# ---------------- Routes
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -295,71 +335,67 @@ def api_search():
         results.extend(search_youtube(q, limit=limit)["results"])
 
     qlow = q.lower()
-    results.sort(key=lambda r: (0 if qlow in (r.get("title") or "").lower() else 1, r.get("source"), r.get("title")))
+    results.sort(
+        key=lambda r: (
+            0 if qlow in (r.get("title") or "").lower() else 1,
+            r.get("source"),
+            r.get("title"),
+        )
+    )
     return jsonify({"ok": True, "error": None, "results": results})
 
 
-@app.get("/_admin")
-def admin_panel():
-    denied = basic_auth_required()
-    if denied:
-        return denied
+# ---------------- New Admin (hidden path + premium admin.html)
+@app.get(f"/{ADMIN_PATH}")
+@admin_required
+def admin_page():
+    # admin arayüz dosyası
+    return send_from_directory(app.static_folder, "admin.html")
 
+
+@app.get(f"/{ADMIN_PATH}/health")
+@admin_required
+def admin_health():
+    return jsonify(ok=True, service="pulsetune")
+
+
+@app.get(f"/{ADMIN_PATH}/stats")
+@admin_required
+def admin_stats():
+    """
+    Son 200 arama logunu JSON döndürür.
+    admin.html burayı çağırır.
+    """
     conn = db()
     cur = conn.cursor()
     cur.execute("SELECT q, source, ip, user_agent, created_at FROM search_logs ORDER BY id DESC LIMIT 200")
     rows = cur.fetchall()
     conn.close()
 
-    def esc(s):
-        return (
-            (s or "")
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#039;")
-        )
-
-    html_rows = []
+    out = []
     for r in rows:
-        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(r["created_at"])))
-        html_rows.append(
-            f"""
-            <tr>
-              <td>{esc(ts)}</td>
-              <td>{esc(r['source'])}</td>
-              <td>{esc(r['q'])}</td>
-              <td>{esc(r['ip'])}</td>
-              <td>{esc(r['user_agent'])}</td>
-            </tr>
-            """
+        out.append(
+            {
+                "q": r["q"],
+                "source": r["source"],
+                "ip": r["ip"],
+                "user_agent": r["user_agent"],
+                "created_at": int(r["created_at"]),
+            }
         )
 
+    return jsonify(ok=True, count=len(out), rows=out)
+
+
+# ---------------- (Optional) Keep old /_admin (backward compatible)
+# Eğer istersen tamamen kapatırız. Şimdilik kalsın diye aynı sayfaya yönlendirdim.
+@app.get("/_admin")
+def legacy_admin_redirect():
+    # Eski adresi bilen varsa yeni gizli panele yönlendir (auth yine ister)
     return Response(
-        f"""
-        <!doctype html>
-        <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-        <title>Admin</title>
-        <style>
-          body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;background:#0b1020;color:#fff}}
-          table{{width:100%;border-collapse:collapse}}
-          th,td{{border-bottom:1px solid rgba(255,255,255,.12);padding:10px;text-align:left;font-size:13px;vertical-align:top}}
-          th{{color:rgba(255,255,255,.8)}}
-          td{{color:rgba(255,255,255,.9)}}
-        </style></head>
-        <body>
-          <h2>Admin Panel</h2>
-          <p>Son 200 arama logu</p>
-          <table>
-            <thead><tr><th>Zaman</th><th>Kaynak</th><th>Sorgu</th><th>IP</th><th>User-Agent</th></tr></thead>
-            <tbody>
-              {''.join(html_rows) if html_rows else '<tr><td colspan="5">Log yok.</td></tr>'}
-            </tbody>
-          </table>
-        </body></html>
-        """,
-        mimetype="text/html",
+        f"Moved. Use /{ADMIN_PATH}",
+        status=301,
+        headers={"Location": f"/{ADMIN_PATH}"},
     )
 
 
